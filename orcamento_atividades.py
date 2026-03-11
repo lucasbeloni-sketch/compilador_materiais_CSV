@@ -182,13 +182,33 @@ def read_source_header(svc, spreadsheet_id, sheet_name):
     return [""] * NUM_COLS
 
 
-def gerar_codigo_extra(valor_a):
-    """Gera o valor da coluna extra com base na coluna A."""
-    if valor_a in ("", None):
+def normalizar_valor_codigo(valor):
+    """Normaliza o valor para uso no código, removendo .0 de inteiros."""
+    if valor in ("", None):
         return ""
 
-    if not isinstance(valor_a, str):
-        valor_a = str(valor_a)
+    if isinstance(valor, int):
+        return str(valor)
+
+    if isinstance(valor, float):
+        if valor.is_integer():
+            return str(int(valor))
+        return format(valor, "f").rstrip("0").rstrip(".")
+
+    s = str(valor).strip()
+
+    # Caso venha como texto tipo '1133017.0'
+    if re.fullmatch(r"\d+\.0+", s):
+        s = s.split(".", 1)[0]
+
+    return s
+
+
+def gerar_codigo_extra(valor_a):
+    """Gera o valor da coluna extra com base na coluna A."""
+    valor_a = normalizar_valor_codigo(valor_a)
+    if valor_a == "":
+        return ""
 
     before_underscore = valor_a.split("_", 1)[0]
     digits_only = re.sub(r"\D", "", before_underscore)
