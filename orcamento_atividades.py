@@ -8,6 +8,7 @@
 # - Salva CSV com delimitador ";" na pasta do Google Drive
 # - Nome fixo do arquivo: MATERIAIS.csv
 # - Se já existir, sobrescreve
+# - Inclui cabeçalho fixo no CSV
 # ===============================================================
 
 import os
@@ -46,9 +47,15 @@ OUTPUT_FILE_NAME = "MATERIAIS.csv"
 
 NUM_COLS = 5  # A:E
 
-# Se quiser incluir cabeçalho no CSV, mude para True
-INCLUDE_HEADER = False
-HEADER_EXTRA_NAME = "CODIGO_A"
+# Cabeçalho fixo do CSV
+CSV_HEADER = [
+    "Projeto",
+    "Código",
+    "Descrição",
+    "Quantidade",
+    "Orçamentista",
+    "Com Mascara",
+]
 
 # ===============================================================
 
@@ -173,15 +180,6 @@ def read_source_block(svc, spreadsheet_id, sheet_name):
     return tratar_colunas_numericas(rows)
 
 
-def read_source_header(svc, spreadsheet_id, sheet_name):
-    """Lê A1:E da origem para usar como cabeçalho do CSV, se necessário."""
-    rng = f"{sheet_name}!A1:E1"
-    values = read_values(svc, spreadsheet_id, rng)
-    if values:
-        return pad_row_to_n_cols(values[0], NUM_COLS)
-    return [""] * NUM_COLS
-
-
 def normalizar_valor_codigo(valor):
     """Normaliza o valor para uso no código, removendo .0 de inteiros."""
     if valor in ("", None):
@@ -197,7 +195,6 @@ def normalizar_valor_codigo(valor):
 
     s = str(valor).strip()
 
-    # Caso venha como texto tipo '1133017.0'
     if re.fullmatch(r"\d+\.0+", s):
         s = s.split(".", 1)[0]
 
@@ -358,13 +355,9 @@ def main():
 
     all_rows = []
     report_lines = []
-    header_row = None
 
     for i, fid in enumerate(source_ids, start=1):
         try:
-            if INCLUDE_HEADER and header_row is None:
-                header_row = read_source_header(sheets_svc, fid, SOURCE_SHEET_NAME)
-
             rows = read_source_block(sheets_svc, fid, SOURCE_SHEET_NAME)
             report_lines.append(f"Fonte #{i}: {len(rows)} linha(s).")
             all_rows.extend(rows)
@@ -386,12 +379,7 @@ def main():
     print(f"🧱 Montando linhas finais com coluna extra para {total_expected} linha(s)...")
     final_rows = montar_linhas_finais(all_rows)
 
-    if INCLUDE_HEADER:
-        if not header_row:
-            header_row = [""] * NUM_COLS
-        csv_rows = [header_row + [HEADER_EXTRA_NAME]] + final_rows
-    else:
-        csv_rows = final_rows
+    csv_rows = [CSV_HEADER] + final_rows
 
     print(f"📝 Gerando CSV: {OUTPUT_FILE_NAME}")
     csv_bytes = build_csv_bytes(csv_rows)
