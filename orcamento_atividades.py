@@ -5,7 +5,7 @@
 # - Concatena tudo
 # - Converte coluna A para número
 # - Gera coluna extra com base na coluna B
-# - Salva CSV na pasta do Google Drive
+# - Salva CSV com delimitador ";" na pasta do Google Drive
 # ===============================================================
 
 import os
@@ -233,11 +233,11 @@ def format_csv_value(value):
 
 
 def build_csv_bytes(rows):
-    """Converte as linhas para bytes CSV (UTF-8 BOM para abrir bem no Excel)."""
+    """Converte as linhas para bytes CSV com delimitador ';'."""
     buffer = io.StringIO(newline="")
     writer = csv.writer(
         buffer,
-        delimiter=",",
+        delimiter=";",
         quotechar='"',
         quoting=csv.QUOTE_MINIMAL,
         lineterminator="\n",
@@ -285,7 +285,6 @@ def main():
     print(f"👤 Service Account: {sa_email}")
     print("   ➜ Garanta acesso à planilha de configuração, às fontes e à pasta do Drive.\n")
 
-    # Lê fontes da BD_Config
     try:
         source_ids = get_source_ids_from_config(sheets_svc)
     except HttpError as e:
