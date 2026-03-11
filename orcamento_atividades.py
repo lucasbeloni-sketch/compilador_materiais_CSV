@@ -1,7 +1,8 @@
 # ===============================================================
 # Importador MATERIAIS -> CSV no Google Drive
+# - Lê A2:E da aba MATERIAIS_BASE da planilha principal
 # - Lê a lista de fontes em BD_Config!A3:A (IDs ou URLs)
-# - Copia A:E (linha 2+) da aba MATERIAIS de cada fonte
+# - Copia A2:E da aba MATERIAIS de cada fonte
 # - Concatena tudo
 # - Converte coluna A para número
 # - Gera coluna extra com base na coluna A
@@ -31,13 +32,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Planilha onde fica a configuração das fontes
+# Planilha principal onde fica a configuração das fontes
 CONFIG_SPREADSHEET_ID = "1Ipp454Clq0lKik8G5LjMMmV-8eA0R6if4FGG555K1j8"
 CONFIG_SHEET_NAME = "BD_Config"
 CONFIG_RANGE = "A3:A"
 
-# Aba de origem
+# Aba base adicional na própria planilha principal
+BASE_SHEET_NAME = "MATERIAIS_BASE"
+BASE_RANGE = "A2:E"
+
+# Aba de origem das fontes listadas em BD_Config
 SOURCE_SHEET_NAME = "MATERIAIS"
+SOURCE_RANGE = "A2:E"
 
 # Pasta de destino no Google Drive
 DRIVE_FOLDER_ID = "1la_5Ozfa0zkZQ8a4OKElkjrIA9dPUB8Y"
@@ -172,12 +178,23 @@ def get_source_ids_from_config(svc):
     return uniq
 
 
-def read_source_block(svc, spreadsheet_id, sheet_name):
-    """Lê A2:E da origem e aplica tratamento numérico."""
-    rng = f"{sheet_name}!A2:E"
+def read_block(svc, spreadsheet_id, rng):
+    """Lê um intervalo e padroniza para A:E."""
     values = read_values(svc, spreadsheet_id, rng)
     rows = [pad_row_to_n_cols(r, NUM_COLS) for r in values]
     return tratar_colunas_numericas(rows)
+
+
+def read_base_block(svc):
+    """Lê A2:E da aba MATERIAIS_BASE da planilha principal."""
+    rng = f"{BASE_SHEET_NAME}!{BASE_RANGE}"
+    return read_block(svc, CONFIG_SPREADSHEET_ID, rng)
+
+
+def read_source_block(svc, spreadsheet_id):
+    """Lê A2:E da aba MATERIAIS das fontes listadas."""
+    rng = f"{SOURCE_SHEET_NAME}!{SOURCE_RANGE}"
+    return read_block(svc, spreadsheet_id, rng)
 
 
 def normalizar_valor_codigo(valor):
@@ -327,7 +344,7 @@ def create_or_update_csv_in_drive(drive_svc, folder_id, file_name, csv_bytes):
 
 
 def main():
-    print("🔄 Iniciando importação baseado em BD_Config!A3:A ...\n")
+    print("🔄 Iniciando importação...\n")
 
     try:
         sheets_svc, drive_svc, sa_email = get_services_and_email()
@@ -336,29 +353,39 @@ def main():
         return
 
     print(f"👤 Service Account: {sa_email}")
-    print("   ➜ Garanta acesso à planilha de configuração, às fontes e à pasta do Drive.\n")
+    print("   ➜ Garanta acesso à planilha principal, às fontes e à pasta do Drive.\n")
 
+    all_rows = []
+    report_lines = []
+
+    # 1) Lê a aba MATERIAIS_BASE da planilha principal
+    try:
+        base_rows = read_base_block(sheets_svc)
+        report_lines.append(
+            f"MATERIAIS_BASE ({CONFIG_SPREADSHEET_ID}): {len(base_rows)} linha(s)."
+        )
+        all_rows.extend(base_rows)
+    except HttpError as e:
+        report_lines.append(f"MATERIAIS_BASE: ERRO -> {e}")
+        print("⚠️ Erro ao ler MATERIAIS_BASE da planilha principal.")
+
+    # 2) Lê as fontes da BD_Config
     try:
         source_ids = get_source_ids_from_config(sheets_svc)
     except HttpError as e:
         print("❌ Erro ao ler BD_Config:", e)
         return
 
-    if not source_ids:
-        print("❌ Nenhuma fonte encontrada em BD_Config!A3:A (IDs/URLs).")
-        return
+    if source_ids:
+        print(f"📚 Fontes encontradas em BD_Config: {len(source_ids)}")
+        for i, sid in enumerate(source_ids, start=1):
+            print(f"   - Fonte #{i}: {sid}")
+        print()
 
-    print(f"📚 Fontes encontradas em BD_Config: {len(source_ids)}")
-    for i, sid in enumerate(source_ids, start=1):
-        print(f"   - Fonte #{i}: {sid}")
-    print()
-
-    all_rows = []
-    report_lines = []
-
+    # 3) Lê a aba MATERIAIS de cada fonte
     for i, fid in enumerate(source_ids, start=1):
         try:
-            rows = read_source_block(sheets_svc, fid, SOURCE_SHEET_NAME)
+            rows = read_source_block(sheets_svc, fid)
             report_lines.append(f"Fonte #{i}: {len(rows)} linha(s).")
             all_rows.extend(rows)
 
