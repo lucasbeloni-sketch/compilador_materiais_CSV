@@ -4,7 +4,7 @@
 # - Copia A:E (linha 2+) da aba MATERIAIS de cada fonte
 # - Concatena tudo
 # - Converte coluna A para número
-# - Gera coluna extra com base na coluna B
+# - Gera coluna extra com base na coluna A
 # - Salva CSV com delimitador ";" na pasta do Google Drive
 # - Nome fixo do arquivo: MATERIAIS.csv
 # - Se já existir, sobrescreve
@@ -48,7 +48,7 @@ NUM_COLS = 5  # A:E
 
 # Se quiser incluir cabeçalho no CSV, mude para True
 INCLUDE_HEADER = False
-HEADER_EXTRA_NAME = "CODIGO_B"
+HEADER_EXTRA_NAME = "CODIGO_A"
 
 # ===============================================================
 
@@ -182,15 +182,15 @@ def read_source_header(svc, spreadsheet_id, sheet_name):
     return [""] * NUM_COLS
 
 
-def gerar_codigo_extra(valor_b):
-    """Gera o valor da coluna extra com base na coluna B."""
-    if valor_b in ("", None):
+def gerar_codigo_extra(valor_a):
+    """Gera o valor da coluna extra com base na coluna A."""
+    if valor_a in ("", None):
         return ""
 
-    if not isinstance(valor_b, str):
-        valor_b = str(valor_b)
+    if not isinstance(valor_a, str):
+        valor_a = str(valor_a)
 
-    before_underscore = valor_b.split("_", 1)[0]
+    before_underscore = valor_a.split("_", 1)[0]
     digits_only = re.sub(r"\D", "", before_underscore)
 
     if len(digits_only) == 6:
@@ -200,16 +200,16 @@ def gerar_codigo_extra(valor_b):
     else:
         prefix = "B-"
 
-    return prefix + valor_b
+    return prefix + valor_a
 
 
 def montar_linhas_finais(rows):
-    """Adiciona a coluna extra em cada linha."""
+    """Adiciona a coluna extra em cada linha com base na coluna A."""
     final_rows = []
     for row in rows:
         row = pad_row_to_n_cols(row, NUM_COLS)
-        val_b = row[1] if len(row) > 1 else ""
-        extra_val = gerar_codigo_extra(val_b)
+        val_a = row[0] if len(row) > 0 else ""
+        extra_val = gerar_codigo_extra(val_a)
         final_rows.append(row + [extra_val])
     return final_rows
 
