@@ -6,6 +6,8 @@
 # - Converte coluna A para número
 # - Gera coluna extra com base na coluna B
 # - Salva CSV com delimitador ";" na pasta do Google Drive
+# - Nome fixo do arquivo: MATERIAIS.csv
+# - Se já existir, sobrescreve
 # ===============================================================
 
 import os
@@ -13,7 +15,6 @@ import re
 import io
 import csv
 import json
-from datetime import datetime, timedelta
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -40,8 +41,8 @@ SOURCE_SHEET_NAME = "MATERIAIS"
 # Pasta de destino no Google Drive
 DRIVE_FOLDER_ID = "1la_5Ozfa0zkZQ8a4OKElkjrIA9dPUB8Y"
 
-# Nome base do arquivo CSV
-OUTPUT_FILE_BASENAME = "MATERIAIS_BASE"
+# Nome fixo do arquivo CSV
+OUTPUT_FILE_NAME = "MATERIAIS.csv"
 
 NUM_COLS = 5  # A:E
 
@@ -250,13 +251,46 @@ def build_csv_bytes(rows):
     return csv_content.encode("utf-8-sig")
 
 
-def upload_csv_to_drive(drive_svc, folder_id, file_name, csv_bytes):
-    """Envia o CSV para a pasta do Google Drive."""
+def find_existing_file_in_folder(drive_svc, folder_id, file_name):
+    """Procura arquivo com nome exato dentro da pasta."""
+    query = (
+        f"name = '{file_name.replace(\"'\", \"\\\\'\")}' "
+        f"and '{folder_id}' in parents "
+        f"and trashed = false"
+    )
+
+    resp = drive_svc.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id,name,modifiedTime,webViewLink)",
+        pageSize=10,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+
+    files = resp.get("files", [])
+    return files[0] if files else None
+
+
+def create_or_update_csv_in_drive(drive_svc, folder_id, file_name, csv_bytes):
+    """Cria ou sobrescreve um CSV na pasta do Google Drive."""
     media = MediaIoBaseUpload(
         io.BytesIO(csv_bytes),
         mimetype="text/csv",
         resumable=False,
     )
+
+    existing = find_existing_file_in_folder(drive_svc, folder_id, file_name)
+
+    if existing:
+        updated = drive_svc.files().update(
+            fileId=existing["id"],
+            media_body=media,
+            fields="id,name,webViewLink",
+            supportsAllDrives=True,
+        ).execute()
+        updated["_action"] = "updated"
+        return updated
 
     file_metadata = {
         "name": file_name,
@@ -269,7 +303,7 @@ def upload_csv_to_drive(drive_svc, folder_id, file_name, csv_bytes):
         fields="id,name,webViewLink",
         supportsAllDrives=True,
     ).execute()
-
+    created["_action"] = "created"
     return created
 
 
@@ -337,18 +371,14 @@ def main():
     else:
         csv_rows = final_rows
 
-    now_brt = datetime.utcnow() - timedelta(hours=3)
-    timestamp = now_brt.strftime("%Y%m%d_%H%M%S")
-    file_name = f"{OUTPUT_FILE_BASENAME}_{timestamp}.csv"
-
-    print(f"📝 Gerando CSV: {file_name}")
+    print(f"📝 Gerando CSV: {OUTPUT_FILE_NAME}")
     csv_bytes = build_csv_bytes(csv_rows)
 
     try:
-        uploaded = upload_csv_to_drive(
+        uploaded = create_or_update_csv_in_drive(
             drive_svc=drive_svc,
             folder_id=DRIVE_FOLDER_ID,
-            file_name=file_name,
+            file_name=OUTPUT_FILE_NAME,
             csv_bytes=csv_bytes,
         )
     except HttpError as e:
@@ -357,7 +387,12 @@ def main():
 
     print("\n=== RELATÓRIO DE EXPORTAÇÃO ===")
     print("\n".join(report_lines))
-    print(f"\n✅ CSV enviado com sucesso!")
+    print("\n✅ CSV processado com sucesso!")
+    print(
+        "♻️ Ação: sobrescrito"
+        if uploaded.get("_action") == "updated"
+        else "🆕 Ação: criado"
+    )
     print(f"📄 Nome: {uploaded.get('name')}")
     print(f"🆔 ID: {uploaded.get('id')}")
     if uploaded.get("webViewLink"):
