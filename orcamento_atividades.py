@@ -253,8 +253,10 @@ def build_csv_bytes(rows):
 
 def find_existing_file_in_folder(drive_svc, folder_id, file_name):
     """Procura arquivo com nome exato dentro da pasta."""
+    escaped_file_name = file_name.replace("'", "\\'")
+
     query = (
-        f"name = '{file_name.replace(\"'\", \"\\\\'\")}' "
+        f"name = '{escaped_file_name}' "
         f"and '{folder_id}' in parents "
         f"and trashed = false"
     )
@@ -388,11 +390,7 @@ def main():
     print("\n=== RELATÓRIO DE EXPORTAÇÃO ===")
     print("\n".join(report_lines))
     print("\n✅ CSV processado com sucesso!")
-    print(
-        "♻️ Ação: sobrescrito"
-        if uploaded.get("_action") == "updated"
-        else "🆕 Ação: criado"
-    )
+    print("♻️ Ação: sobrescrito" if uploaded.get("_action") == "updated" else "🆕 Ação: criado")
     print(f"📄 Nome: {uploaded.get('name')}")
     print(f"🆔 ID: {uploaded.get('id')}")
     if uploaded.get("webViewLink"):
