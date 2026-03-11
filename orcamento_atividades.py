@@ -1,10 +1,10 @@
 # ===============================================================
-# Importador ATIVIDADES_POR_PONTO_BASE -> CSV no Google Drive
+# Importador MATERIAIS -> CSV no Google Drive
 # - Lê a lista de fontes em BD_Config!A3:A (IDs ou URLs)
-# - Copia A:J (linha 2+) da aba ATIVIDADES_POR_PONTO de cada fonte
+# - Copia A:E (linha 2+) da aba MATERIAIS de cada fonte
 # - Concatena tudo
-# - Converte colunas A e G para número
-# - Gera coluna K com base na coluna B
+# - Converte coluna A para número
+# - Gera coluna extra com base na coluna B
 # - Salva CSV na pasta do Google Drive
 # ===============================================================
 
@@ -13,7 +13,6 @@ import re
 import io
 import csv
 import json
-import base64
 from datetime import datetime, timedelta
 
 from google.oauth2 import service_account
@@ -35,20 +34,20 @@ CONFIG_SPREADSHEET_ID = "1Ipp454Clq0lKik8G5LjMMmV-8eA0R6if4FGG555K1j8"
 CONFIG_SHEET_NAME = "BD_Config"
 CONFIG_RANGE = "A3:A"
 
-# Aba de origem (mesmo nome em todas as fontes)
-SOURCE_SHEET_NAME = "ATIVIDADES_POR_PONTO"
+# Aba de origem
+SOURCE_SHEET_NAME = "MATERIAIS"
 
 # Pasta de destino no Google Drive
 DRIVE_FOLDER_ID = "1la_5Ozfa0zkZQ8a4OKElkjrIA9dPUB8Y"
 
 # Nome base do arquivo CSV
-OUTPUT_FILE_BASENAME = "ATIVIDADES_POR_PONTO_BASE"
+OUTPUT_FILE_BASENAME = "MATERIAIS_BASE"
 
-NUM_COLS = 10  # A:J
+NUM_COLS = 5  # A:E
 
 # Se quiser incluir cabeçalho no CSV, mude para True
 INCLUDE_HEADER = False
-HEADER_K_NAME = "CODIGO_K"
+HEADER_EXTRA_NAME = "CODIGO_B"
 
 # ===============================================================
 
@@ -108,12 +107,10 @@ def limpar_numero(valor):
 
 
 def tratar_colunas_numericas(rows):
-    """Aplica limpeza nas colunas A (0) e G (6)."""
+    """Aplica limpeza na coluna A (0)."""
     for r in rows:
         if len(r) > 0:
             r[0] = limpar_numero(r[0])
-        if len(r) > 6:
-            r[6] = limpar_numero(r[6])
     return rows
 
 
@@ -168,24 +165,24 @@ def get_source_ids_from_config(svc):
 
 
 def read_source_block(svc, spreadsheet_id, sheet_name):
-    """Lê A2:J da origem e aplica tratamento numérico."""
-    rng = f"{sheet_name}!A2:J"
+    """Lê A2:E da origem e aplica tratamento numérico."""
+    rng = f"{sheet_name}!A2:E"
     values = read_values(svc, spreadsheet_id, rng)
     rows = [pad_row_to_n_cols(r, NUM_COLS) for r in values]
     return tratar_colunas_numericas(rows)
 
 
 def read_source_header(svc, spreadsheet_id, sheet_name):
-    """Lê A1:J da origem para usar como cabeçalho do CSV, se necessário."""
-    rng = f"{sheet_name}!A1:J1"
+    """Lê A1:E da origem para usar como cabeçalho do CSV, se necessário."""
+    rng = f"{sheet_name}!A1:E1"
     values = read_values(svc, spreadsheet_id, rng)
     if values:
         return pad_row_to_n_cols(values[0], NUM_COLS)
     return [""] * NUM_COLS
 
 
-def gerar_codigo_k(valor_b):
-    """Gera o valor da coluna K com base na coluna B."""
+def gerar_codigo_extra(valor_b):
+    """Gera o valor da coluna extra com base na coluna B."""
     if valor_b in ("", None):
         return ""
 
@@ -206,13 +203,13 @@ def gerar_codigo_k(valor_b):
 
 
 def montar_linhas_finais(rows):
-    """Adiciona a coluna K em cada linha."""
+    """Adiciona a coluna extra em cada linha."""
     final_rows = []
     for row in rows:
         row = pad_row_to_n_cols(row, NUM_COLS)
         val_b = row[1] if len(row) > 1 else ""
-        k_val = gerar_codigo_k(val_b)
-        final_rows.append(row + [k_val])
+        extra_val = gerar_codigo_extra(val_b)
+        final_rows.append(row + [extra_val])
     return final_rows
 
 
@@ -331,14 +328,13 @@ def main():
         print("\nNada para exportar.")
         return
 
-    print(f"🧱 Montando linhas finais com coluna K para {total_expected} linha(s)...")
+    print(f"🧱 Montando linhas finais com coluna extra para {total_expected} linha(s)...")
     final_rows = montar_linhas_finais(all_rows)
 
-    # Se quiser incluir cabeçalho no CSV
     if INCLUDE_HEADER:
         if not header_row:
             header_row = [""] * NUM_COLS
-        csv_rows = [header_row + [HEADER_K_NAME]] + final_rows
+        csv_rows = [header_row + [HEADER_EXTRA_NAME]] + final_rows
     else:
         csv_rows = final_rows
 
