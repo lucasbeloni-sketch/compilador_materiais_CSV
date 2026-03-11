@@ -2,11 +2,6 @@ name: Orçamento Atividades
 
 on:
   schedule:
-    # Horário do GitHub Actions é UTC
-    # 07:00 BRT -> 10:00 UTC
-    # 12:00 BRT -> 15:00 UTC
-    # 15:00 BRT -> 18:00 UTC
-    # 18:00 BRT -> 21:00 UTC
     - cron: "0 10,15,18,21 * * *"
   workflow_dispatch:
 
@@ -27,12 +22,33 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      # 🔑 Aqui é o pulo do gato: grava o JSON exatamente como está no secret
-      - name: Criar credenciais.json
+      - name: Criar credenciais.json a partir do secret .b64
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_CREDENTIALS_B64: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          printf '%s' "$GOOGLE_CREDENTIALS" > credenciais.json
+          python - <<'PY'
+          import os
+          import re
+          import base64
+
+          b64 = os.environ["GOOGLE_CREDENTIALS_B64"].strip()
+
+          # Remove cabeçalhos/rodapés caso o .b64 tenha sido gerado com certutil
+          b64 = re.sub(r"-----BEGIN [^-]+-----", "", b64)
+          b64 = re.sub(r"-----END [^-]+-----", "", b64)
+
+          # Remove espaços e quebras de linha
+          b64 = "".join(b64.split())
+
+          data = base64.b64decode(b64)
+
+          with open("credenciais.json", "wb") as f:
+              f.write(data)
+          PY
+
+      - name: Validar credenciais.json
+        run: |
+          python -m json.tool credenciais.json > /dev/null
 
       - name: Executar orcamento_atividades.py
         run: |
