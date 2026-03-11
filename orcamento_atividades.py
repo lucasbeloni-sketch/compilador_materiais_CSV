@@ -6,6 +6,7 @@
 # - Concatena tudo
 # - Converte coluna A para número
 # - Gera coluna extra com base na coluna A
+# - Remove linhas duplicadas
 # - Salva CSV com delimitador ";" na pasta do Google Drive
 # - Nome fixo do arquivo: MATERIAIS.csv
 # - Se já existir, sobrescreve
@@ -267,6 +268,20 @@ def format_csv_value(value):
     return str(value)
 
 
+def remover_linhas_duplicadas(rows):
+    """Remove linhas duplicadas preservando a primeira ocorrência."""
+    seen = set()
+    unique_rows = []
+
+    for row in rows:
+        chave = tuple(format_csv_value(v) for v in row)
+        if chave not in seen:
+            seen.add(chave)
+            unique_rows.append(row)
+
+    return unique_rows
+
+
 def build_csv_bytes(rows):
     """Converte as linhas para bytes CSV com delimitador ';'."""
     buffer = io.StringIO(newline="")
@@ -395,18 +410,25 @@ def main():
         except Exception as e:
             report_lines.append(f"Fonte #{i}: ERRO -> {e}")
 
-    total_expected = len(all_rows)
-    report_lines.append(f"\nTotal consolidado: {total_expected} linha(s).")
+    total_lido = len(all_rows)
+    report_lines.append(f"Total lido antes da deduplicação: {total_lido} linha(s).")
 
-    if total_expected == 0:
+    if total_lido == 0:
         print("\n".join(report_lines))
         print("\nNada para exportar.")
         return
 
-    print(f"🧱 Montando linhas finais com coluna extra para {total_expected} linha(s)...")
+    print(f"🧱 Montando linhas finais com coluna extra para {total_lido} linha(s)...")
     final_rows = montar_linhas_finais(all_rows)
 
-    csv_rows = [CSV_HEADER] + final_rows
+    final_rows_sem_duplicadas = remover_linhas_duplicadas(final_rows)
+    total_final = len(final_rows_sem_duplicadas)
+    removidas = total_lido - total_final
+
+    report_lines.append(f"Total após remover duplicadas: {total_final} linha(s).")
+    report_lines.append(f"Duplicadas removidas: {removidas} linha(s).")
+
+    csv_rows = [CSV_HEADER] + final_rows_sem_duplicadas
 
     print(f"📝 Gerando CSV: {OUTPUT_FILE_NAME}")
     csv_bytes = build_csv_bytes(csv_rows)
