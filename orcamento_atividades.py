@@ -1,113 +1,84 @@
 # ===============================================================
-# Importador ATIVIDADES_POR_PONTO_BASE
+# Importador ATIVIDADES_POR_PONTO_BASE -> CSV no Google Drive
 # - Lê a lista de fontes em BD_Config!A3:A (IDs ou URLs)
 # - Copia A:J (linha 2+) da aba ATIVIDADES_POR_PONTO de cada fonte
-# - Concatena e cola em ATIVIDADES_POR_PONTO_BASE!A2
+# - Concatena tudo
 # - Converte colunas A e G para número
-# - Relatório de linhas por fonte e total colado
+# - Gera coluna K com base na coluna B
+# - Salva CSV na pasta do Google Drive
 # ===============================================================
 
 import os
 import re
+import io
+import csv
+import json
+import base64
 from datetime import datetime, timedelta
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseUpload
 
 # ===================== CONFIG =====================
 
 SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), "credenciais.json")
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Planilha de DESTINO e abas
-DEST_SPREADSHEET_ID = "1Ipp454Clq0lKik8G5LjMMmV-8eA0R6if4FGG555K1j8"
-DEST_SHEET_NAME      = "ATIVIDADES_POR_PONTO_BASE"
-CONFIG_SHEET_NAME    = "BD_Config"              # onde estão as fontes
-CONFIG_RANGE         = "A3:A"                   # lista de IDs/URLs das fontes
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Planilha onde fica a configuração das fontes
+CONFIG_SPREADSHEET_ID = "1Ipp454Clq0lKik8G5LjMMmV-8eA0R6if4FGG555K1j8"
+CONFIG_SHEET_NAME = "BD_Config"
+CONFIG_RANGE = "A3:A"
 
 # Aba de origem (mesmo nome em todas as fontes)
-SOURCE_SHEET_NAME    = "ATIVIDADES_POR_PONTO"
+SOURCE_SHEET_NAME = "ATIVIDADES_POR_PONTO"
 
-START_ROW_DEST       = 2   # começa a colar na linha 2
-NUM_COLS             = 10  # A:J
-WRITE_CHUNK_ROWS     = 20000
+# Pasta de destino no Google Drive
+DRIVE_FOLDER_ID = "1la_5Ozfa0zkZQ8a4OKElkjrIA9dPUB8Y"
+
+# Nome base do arquivo CSV
+OUTPUT_FILE_BASENAME = "ATIVIDADES_POR_PONTO_BASE"
+
+NUM_COLS = 10  # A:J
+
+# Se quiser incluir cabeçalho no CSV, mude para True
+INCLUDE_HEADER = False
+HEADER_K_NAME = "CODIGO_K"
 
 # ===============================================================
 
 
-def get_service_and_email():
+def get_services_and_email():
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        raise FileNotFoundError(f"Arquivo de credenciais não encontrado: {SERVICE_ACCOUNT_FILE}")
+        raise FileNotFoundError(
+            f"Arquivo de credenciais não encontrado: {SERVICE_ACCOUNT_FILE}"
+        )
+
+    if os.path.getsize(SERVICE_ACCOUNT_FILE) == 0:
+        raise ValueError(f"O arquivo de credenciais está vazio: {SERVICE_ACCOUNT_FILE}")
+
+    try:
+        with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
+            json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"O arquivo {SERVICE_ACCOUNT_FILE} não contém JSON válido. Erro: {e}"
+        )
+
     creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        SERVICE_ACCOUNT_FILE,
+        scopes=SCOPES,
     )
-    svc = build("sheets", "v4", credentials=creds)
-    return svc, creds.service_account_email
 
+    sheets_svc = build("sheets", "v4", credentials=creds)
+    drive_svc = build("drive", "v3", credentials=creds)
 
-def ensure_dest_sheet_exists(svc, spreadsheet_id, sheet_name):
-    meta = svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    for s in meta.get("sheets", []):
-        if s.get("properties", {}).get("title") == sheet_name:
-            return
-    body = {"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]}
-    svc.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
-
-
-def ensure_dest_grid_size(svc, spreadsheet_id, sheet_name, min_rows, min_cols):
-    """
-    Garante que a aba de destino tenha pelo menos min_rows linhas e min_cols colunas.
-    Se necessário, atualiza gridProperties.rowCount / columnCount via batchUpdate.
-    """
-    meta = svc.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    target_sheet = None
-    for s in meta.get("sheets", []):
-        props = s.get("properties", {})
-        if props.get("title") == sheet_name:
-            target_sheet = props
-            break
-
-    if not target_sheet:
-        # já deveria existir, mas por segurança
-        return
-
-    sheet_id = target_sheet["sheetId"]
-    grid = target_sheet.get("gridProperties", {})
-    current_rows = grid.get("rowCount", 1000)
-    current_cols = grid.get("columnCount", 26)
-
-    new_grid = {}
-    fields_list = []
-
-    if current_rows < min_rows:
-        new_grid["rowCount"] = min_rows
-        fields_list.append("gridProperties.rowCount")
-
-    if current_cols < min_cols:
-        new_grid["columnCount"] = min_cols
-        fields_list.append("gridProperties.columnCount")
-
-    if not new_grid:
-        return
-
-    fields_str = ",".join(fields_list)
-    body = {
-        "requests": [
-            {
-                "updateSheetProperties": {
-                    "properties": {
-                        "sheetId": sheet_id,
-                        "gridProperties": new_grid,
-                    },
-                    "fields": fields_str,
-                }
-            }
-        ]
-    }
-    svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body=body,
-    ).execute()
+    return sheets_svc, drive_svc, creds.service_account_email
 
 
 def pad_row_to_n_cols(row, n):
@@ -119,14 +90,17 @@ def pad_row_to_n_cols(row, n):
 
 
 def limpar_numero(valor):
-    """Converte 'texto numérico' -> float (remove ', R$, espaços, apóstrofo)."""
+    """Converte texto numérico em número."""
     if isinstance(valor, (int, float)):
         return valor
+
     if not isinstance(valor, str):
         return ""
+
     v = valor.strip().replace("'", "").replace(" ", "")
-    v = re.sub(r"(?i)r\$", "", v)  # remove R$ em qualquer caixa
+    v = re.sub(r"(?i)r\$", "", v)
     v = v.replace(",", ".")
+
     try:
         return float(v)
     except ValueError:
@@ -156,36 +130,40 @@ def extract_spreadsheet_id(text):
     """Aceita ID puro ou URL; retorna o ID ou None se inválido."""
     if not text:
         return None
+
     text = text.strip()
-    # URL padrão: .../spreadsheets/d/<ID>/...
+
     m = re.search(r"/d/([a-zA-Z0-9-_]+)", text)
     if m:
         return m.group(1)
-    # ID 'cru': letras, números, - e _
+
     if re.fullmatch(r"[a-zA-Z0-9-_]{20,}", text):
         return text
+
     return None
 
 
 def get_source_ids_from_config(svc):
-    """Lê BD_Config!A3:A e devolve lista de IDs de planilhas válidos (sem vazios)."""
-    raw = read_values(svc, DEST_SPREADSHEET_ID, f"{CONFIG_SHEET_NAME}!{CONFIG_RANGE}")
+    """Lê BD_Config!A3:A e devolve lista de IDs válidos (sem vazios e sem duplicados)."""
+    raw = read_values(svc, CONFIG_SPREADSHEET_ID, f"{CONFIG_SHEET_NAME}!{CONFIG_RANGE}")
+
     ids = []
     for row in raw:
         cell = row[0].strip() if row and len(row) > 0 else ""
         if not cell:
             continue
+
         sid = extract_spreadsheet_id(cell)
         if sid:
             ids.append(sid)
 
-    # remove duplicatas mantendo ordem
     seen = set()
     uniq = []
     for sid in ids:
         if sid not in seen:
             uniq.append(sid)
             seen.add(sid)
+
     return uniq
 
 
@@ -197,80 +175,126 @@ def read_source_block(svc, spreadsheet_id, sheet_name):
     return tratar_colunas_numericas(rows)
 
 
-# ===============================================================
-# LIMPAR DESTINO (A2:K)
-# ===============================================================
-def clear_dest_range(svc, spreadsheet_id, sheet_name, start_row):
-    # limpa de A2 até K (incluindo coluna K)
-    rng = f"{sheet_name}!A{start_row}:K"
-    svc.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=rng,
-        body={},
+def read_source_header(svc, spreadsheet_id, sheet_name):
+    """Lê A1:J da origem para usar como cabeçalho do CSV, se necessário."""
+    rng = f"{sheet_name}!A1:J1"
+    values = read_values(svc, spreadsheet_id, rng)
+    if values:
+        return pad_row_to_n_cols(values[0], NUM_COLS)
+    return [""] * NUM_COLS
+
+
+def gerar_codigo_k(valor_b):
+    """Gera o valor da coluna K com base na coluna B."""
+    if valor_b in ("", None):
+        return ""
+
+    if not isinstance(valor_b, str):
+        valor_b = str(valor_b)
+
+    before_underscore = valor_b.split("_", 1)[0]
+    digits_only = re.sub(r"\D", "", before_underscore)
+
+    if len(digits_only) == 6:
+        prefix = "B-0"
+    elif len(digits_only) == 7:
+        prefix = "B-"
+    else:
+        prefix = "B-"
+
+    return prefix + valor_b
+
+
+def montar_linhas_finais(rows):
+    """Adiciona a coluna K em cada linha."""
+    final_rows = []
+    for row in rows:
+        row = pad_row_to_n_cols(row, NUM_COLS)
+        val_b = row[1] if len(row) > 1 else ""
+        k_val = gerar_codigo_k(val_b)
+        final_rows.append(row + [k_val])
+    return final_rows
+
+
+def format_csv_value(value):
+    """Formata valores para escrita no CSV."""
+    if value is None or value == "":
+        return ""
+
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+
+    if isinstance(value, int):
+        return str(value)
+
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return format(value, "f").rstrip("0").rstrip(".")
+
+    return str(value)
+
+
+def build_csv_bytes(rows):
+    """Converte as linhas para bytes CSV (UTF-8 BOM para abrir bem no Excel)."""
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(
+        buffer,
+        delimiter=",",
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL,
+        lineterminator="\n",
+    )
+
+    for row in rows:
+        writer.writerow([format_csv_value(v) for v in row])
+
+    csv_content = buffer.getvalue()
+    return csv_content.encode("utf-8-sig")
+
+
+def upload_csv_to_drive(drive_svc, folder_id, file_name, csv_bytes):
+    """Envia o CSV para a pasta do Google Drive."""
+    media = MediaIoBaseUpload(
+        io.BytesIO(csv_bytes),
+        mimetype="text/csv",
+        resumable=False,
+    )
+
+    file_metadata = {
+        "name": file_name,
+        "parents": [folder_id],
+    }
+
+    created = drive_svc.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id,name,webViewLink",
+        supportsAllDrives=True,
     ).execute()
 
-
-def write_values_in_chunks(
-    svc,
-    spreadsheet_id,
-    sheet_name,
-    start_row,
-    data,
-    chunk_rows,
-    num_cols,
-):
-    total = len(data)
-    written = 0
-    col_end = chr(ord("A") + num_cols - 1)
-    while written < total:
-        take = min(chunk_rows, total - written)
-        chunk = data[written : written + take]
-        start = start_row + written
-        end = start + take - 1
-        rng = f"{sheet_name}!A{start}:{col_end}{end}"
-        svc.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=rng,
-            valueInputOption="USER_ENTERED",
-            body={"values": chunk},
-        ).execute()
-        written += take
-    return written
-
-
-def count_nonempty_rows_in_col_a(
-    svc, spreadsheet_id, sheet_name, start_row, expected_rows
-):
-    end_row = start_row + max(expected_rows - 1, 0)
-    if end_row < start_row:
-        return 0
-    rng = f"{sheet_name}!A{start_row}:A{end_row}"
-    vals = read_values(svc, spreadsheet_id, rng)
-    return sum(1 for r in vals if len(r) > 0 and r[0] not in ("", None))
+    return created
 
 
 def main():
     print("🔄 Iniciando importação baseado em BD_Config!A3:A ...\n")
 
     try:
-        svc, sa_email = get_service_and_email()
-    except FileNotFoundError as e:
+        sheets_svc, drive_svc, sa_email = get_services_and_email()
+    except (FileNotFoundError, ValueError) as e:
         print("❌", e)
-        print("   Coloque 'credenciais.json' na mesma pasta do script.")
         return
 
     print(f"👤 Service Account: {sa_email}")
-    print("   ➜ Garanta acesso às fontes listadas na BD_Config e ao destino.\n")
-
-    # Garante que a aba de destino existe
-    try:
-        ensure_dest_sheet_exists(svc, DEST_SPREADSHEET_ID, DEST_SHEET_NAME)
-    except HttpError as e:
-        print("❌ Erro ao acessar destino:", e)
-        return
+    print("   ➜ Garanta acesso à planilha de configuração, às fontes e à pasta do Drive.\n")
 
     # Lê fontes da BD_Config
-    source_ids = get_source_ids_from_config(svc)
+    try:
+        source_ids = get_source_ids_from_config(sheets_svc)
+    except HttpError as e:
+        print("❌ Erro ao ler BD_Config:", e)
+        return
+
     if not source_ids:
         print("❌ Nenhuma fonte encontrada em BD_Config!A3:A (IDs/URLs).")
         return
@@ -280,145 +304,69 @@ def main():
         print(f"   - Fonte #{i}: {sid}")
     print()
 
-    # Lê todas as fontes e empilha
     all_rows = []
     report_lines = []
+    header_row = None
+
     for i, fid in enumerate(source_ids, start=1):
         try:
-            rows = read_source_block(svc, fid, SOURCE_SHEET_NAME)
+            if INCLUDE_HEADER and header_row is None:
+                header_row = read_source_header(sheets_svc, fid, SOURCE_SHEET_NAME)
+
+            rows = read_source_block(sheets_svc, fid, SOURCE_SHEET_NAME)
             report_lines.append(f"Fonte #{i}: {len(rows)} linha(s).")
             all_rows.extend(rows)
+
         except HttpError as e:
             report_lines.append(f"Fonte #{i}: ERRO -> {e}")
-            print(f"⚠️  Origem #{i} inacessível (ID: {fid}). Compartilhe com {sa_email}.")
+            print(f"⚠️ Origem #{i} inacessível (ID: {fid}). Compartilhe com {sa_email}.")
         except Exception as e:
             report_lines.append(f"Fonte #{i}: ERRO -> {e}")
 
     total_expected = len(all_rows)
-    report_lines.append(f"\nTotal esperado: {total_expected} linha(s).")
+    report_lines.append(f"\nTotal consolidado: {total_expected} linha(s).")
 
     if total_expected == 0:
         print("\n".join(report_lines))
-        print("\nNada para colar.")
+        print("\nNada para exportar.")
         return
 
-    # Garante que a grade da aba tenha linhas/colunas suficientes (A:J)
-    min_rows = START_ROW_DEST + total_expected - 1
-    ensure_dest_grid_size(
-        svc,
-        DEST_SPREADSHEET_ID,
-        DEST_SHEET_NAME,
-        min_rows,
-        NUM_COLS,
-    )
+    print(f"🧱 Montando linhas finais com coluna K para {total_expected} linha(s)...")
+    final_rows = montar_linhas_finais(all_rows)
 
-    # Limpa destino e cola
-    print("🧹 Limpando destino A2:K...")
-    clear_dest_range(
-        svc,
-        DEST_SPREADSHEET_ID,
-        DEST_SHEET_NAME,
-        START_ROW_DEST,
-    )
+    # Se quiser incluir cabeçalho no CSV
+    if INCLUDE_HEADER:
+        if not header_row:
+            header_row = [""] * NUM_COLS
+        csv_rows = [header_row + [HEADER_K_NAME]] + final_rows
+    else:
+        csv_rows = final_rows
 
-    print(f"📤 Colando {total_expected} linha(s) em {DEST_SHEET_NAME}...")
-    write_values_in_chunks(
-        svc,
-        DEST_SPREADSHEET_ID,
-        DEST_SHEET_NAME,
-        START_ROW_DEST,
-        all_rows,
-        WRITE_CHUNK_ROWS,
-        NUM_COLS,
-    )
-
-    # Checagem final
-    pasted_count = count_nonempty_rows_in_col_a(
-        svc, DEST_SPREADSHEET_ID, DEST_SHEET_NAME, START_ROW_DEST, total_expected
-    )
-
-    report_lines.append(
-        f"Total efetivamente colado (coluna A): {pasted_count} linha(s)."
-    )
-    ok = pasted_count == total_expected
-
-    print("\n=== RELATÓRIO DE IMPORTAÇÃO ===")
-    print("\n".join(report_lines))
-    print("\n✅ OK - Tudo conferido!" if ok else "\n⚠️ Diferença detectada.")
-
-    # ===============================================================
-    # === COLUNA K: GERAR CÓDIGO A PARTIR DA COLUNA B ===============
-    # ===============================================================
-    try:
-        if pasted_count > 0:
-            start_row = START_ROW_DEST
-            end_row = START_ROW_DEST + pasted_count - 1
-
-            # garante até a coluna K
-            ensure_dest_grid_size(
-                svc,
-                DEST_SPREADSHEET_ID,
-                DEST_SHEET_NAME,
-                min_rows=end_row,
-                min_cols=11,
-            )
-
-            rng_b = f"{DEST_SHEET_NAME}!B{start_row}:B{end_row}"
-            vals_b = read_values(svc, DEST_SPREADSHEET_ID, rng_b)
-
-            new_k_values = []
-            for i in range(pasted_count):
-                val_b = ""
-                if i < len(vals_b) and vals_b[i]:
-                    val_b = vals_b[i][0]
-
-                if val_b in ("", None):
-                    new_k_values.append([""])
-                    continue
-
-                if not isinstance(val_b, str):
-                    val_b = str(val_b)
-
-                before_underscore = val_b.split("_", 1)[0]
-                digits_only = re.sub(r"\D", "", before_underscore)
-
-                if len(digits_only) == 6:
-                    prefix = "B-0"
-                elif len(digits_only) == 7:
-                    prefix = "B-"
-                else:
-                    prefix = "B-"  # fallback
-
-                k_val = prefix + val_b
-                new_k_values.append([k_val])
-
-            rng_k = f"{DEST_SHEET_NAME}!K{start_row}:K{end_row}"
-            svc.spreadsheets().values().update(
-                spreadsheetId=DEST_SPREADSHEET_ID,
-                range=rng_k,
-                valueInputOption="USER_ENTERED",
-                body={"values": new_k_values},
-            ).execute()
-            print(f"🔤 Coluna K preenchida para {pasted_count} linha(s).")
-    except Exception as e:
-        print("⚠️ Erro ao atualizar coluna K:", e)
-
-    # ===============================================================
-    # === TIMESTAMP EM L2 DA ABA ATIVIDADES_POR_PONTO_BASE ==========
-    # ===============================================================
     now_brt = datetime.utcnow() - timedelta(hours=3)
-    timestamp = now_brt.strftime("%d/%m/%Y %H:%M:%S")
+    timestamp = now_brt.strftime("%Y%m%d_%H%M%S")
+    file_name = f"{OUTPUT_FILE_BASENAME}_{timestamp}.csv"
+
+    print(f"📝 Gerando CSV: {file_name}")
+    csv_bytes = build_csv_bytes(csv_rows)
 
     try:
-        svc.spreadsheets().values().update(
-            spreadsheetId=DEST_SPREADSHEET_ID,
-            range=f"{DEST_SHEET_NAME}!L2",
-            valueInputOption="USER_ENTERED",
-            body={"values": [[timestamp]]},
-        ).execute()
-        print(f"⏱️ Timestamp gravado em {DEST_SHEET_NAME}!L2 (BRT): {timestamp}")
-    except Exception as e:
-        print("⚠️ Erro ao gravar timestamp em L2:", e)
+        uploaded = upload_csv_to_drive(
+            drive_svc=drive_svc,
+            folder_id=DRIVE_FOLDER_ID,
+            file_name=file_name,
+            csv_bytes=csv_bytes,
+        )
+    except HttpError as e:
+        print("❌ Erro ao enviar CSV para o Google Drive:", e)
+        return
+
+    print("\n=== RELATÓRIO DE EXPORTAÇÃO ===")
+    print("\n".join(report_lines))
+    print(f"\n✅ CSV enviado com sucesso!")
+    print(f"📄 Nome: {uploaded.get('name')}")
+    print(f"🆔 ID: {uploaded.get('id')}")
+    if uploaded.get("webViewLink"):
+        print(f"🔗 Link: {uploaded.get('webViewLink')}")
 
 
 if __name__ == "__main__":
