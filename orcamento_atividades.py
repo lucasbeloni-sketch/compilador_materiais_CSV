@@ -1,21 +1,25 @@
 # ===============================================================
-# Exportador de 2 CSVs no Google Drive
+# Exportador de CSVs no Google Drive
 #
 # Gera na mesma execução:
+#
 # 1) MATERIAIS.csv
 #    - Base: MATERIAIS_BASE!A2:E
 #    - Fontes: MATERIAIS!A2:E
 #    - Cabeçalho fixo
+#    - Gera coluna extra "Com Mascara" com base na coluna A
+#    - Remove duplicadas
 #
-# 2) MATERIAIS_POR_PONTO.csv
-#    - Base: MATERIAIS_POR_PONTO_BASE!A2:F
-#    - Fontes: MATERIAIS_POR_PONTO!A2:F
-#    - Cabeçalho lido de A1:F da aba base + "Com Mascara"
+# 2) Vários arquivos MATERIAIS_POR_PONTO_<valor_coluna_H>.csv
+#    - Base: MATERIAIS_POR_PONTO_BASE!A2:I
+#    - Fontes: MATERIAIS_POR_PONTO!A2:I
+#    - Cabeçalho lido de A1:I da aba base
+#    - NÃO gera coluna extra
+#    - Agrupa pelo valor da coluna H
+#    - Remove duplicadas
 #
 # Regras comuns:
 # - lê as fontes em BD_Config!A3:A
-# - gera coluna extra "Com Mascara" com base na coluna A
-# - remove linhas duplicadas
 # - salva CSV com delimitador ";"
 # - sobrescreve o arquivo se já existir
 # ===============================================================
@@ -48,38 +52,31 @@ CONFIG_RANGE = "A3:A"
 # Pasta de destino no Google Drive
 DRIVE_FOLDER_ID = "1la_5Ozfa0zkZQ8a4OKElkjrIA9dPUB8Y"
 
-# Configurações de cada CSV a ser gerado
-EXPORTS = [
-    {
-        "name": "MATERIAIS",
-        "output_file_name": "MATERIAIS.csv",
-        "base_sheet_name": "MATERIAIS_BASE",
-        "base_range": "A2:E",
-        "base_header_range": None,
-        "source_sheet_name": "MATERIAIS",
-        "source_range": "A2:E",
-        "num_cols": 5,
-        "fixed_header": [
-            "Projeto",
-            "Código",
-            "Descrição",
-            "Quantidade",
-            "Orçamentista",
-            "Com Mascara",
-        ],
-    },
-    {
-        "name": "MATERIAIS_POR_PONTO",
-        "output_file_name": "MATERIAIS_POR_PONTO.csv",
-        "base_sheet_name": "MATERIAIS_POR_PONTO_BASE",
-        "base_range": "A2:F",
-        "base_header_range": "A1:F1",
-        "source_sheet_name": "MATERIAIS_POR_PONTO",
-        "source_range": "A2:F",
-        "num_cols": 6,
-        "fixed_header": None,  # usa cabeçalho da aba base + "Com Mascara"
-    },
+# --- Etapa 1: MATERIAIS ---
+MATERIAIS_OUTPUT_FILE_NAME = "MATERIAIS.csv"
+MATERIAIS_BASE_SHEET_NAME = "MATERIAIS_BASE"
+MATERIAIS_BASE_RANGE = "A2:E"
+MATERIAIS_SOURCE_SHEET_NAME = "MATERIAIS"
+MATERIAIS_SOURCE_RANGE = "A2:E"
+MATERIAIS_NUM_COLS = 5
+MATERIAIS_HEADER = [
+    "Projeto",
+    "Código",
+    "Descrição",
+    "Quantidade",
+    "Orçamentista",
+    "Com Mascara",
 ]
+
+# --- Etapa 2: MATERIAIS_POR_PONTO ---
+MPP_FILE_PREFIX = "MATERIAIS_POR_PONTO"
+MPP_BASE_SHEET_NAME = "MATERIAIS_POR_PONTO_BASE"
+MPP_BASE_RANGE = "A2:I"
+MPP_BASE_HEADER_RANGE = "A1:I1"
+MPP_SOURCE_SHEET_NAME = "MATERIAIS_POR_PONTO"
+MPP_SOURCE_RANGE = "A2:I"
+MPP_NUM_COLS = 9
+MPP_GROUP_COL_INDEX = 7  # coluna H (0-based)
 
 # ===============================================================
 
@@ -249,11 +246,11 @@ def gerar_codigo_extra(valor_a):
     return prefix + valor_a
 
 
-def montar_linhas_finais(rows, num_cols):
+def montar_linhas_finais_materiais(rows):
     """Adiciona a coluna extra em cada linha com base na coluna A."""
     final_rows = []
     for row in rows:
-        row = pad_row_to_n_cols(row, num_cols)
+        row = pad_row_to_n_cols(row, MATERIAIS_NUM_COLS)
         val_a = row[0] if len(row) > 0 else ""
         extra_val = gerar_codigo_extra(val_a)
         final_rows.append(row + [extra_val])
@@ -308,6 +305,23 @@ def build_csv_bytes(rows):
 
     csv_content = buffer.getvalue()
     return csv_content.encode("utf-8-sig")
+
+
+def sanitize_filename_component(value):
+    """
+    Sanitiza o valor usado no nome do arquivo.
+    Remove caracteres inválidos e padroniza vazios.
+    """
+    txt = format_csv_value(value).strip()
+
+    if txt == "":
+        return "SEM_VALOR"
+
+    txt = re.sub(r'[\\/:*?"<>|]+', "_", txt)
+    txt = re.sub(r"\s+", "_", txt)
+    txt = re.sub(r"_+", "_", txt).strip("_")
+
+    return txt if txt else "SEM_VALOR"
 
 
 def find_existing_file_in_folder(drive_svc, folder_id, file_name):
@@ -366,58 +380,41 @@ def create_or_update_csv_in_drive(drive_svc, folder_id, file_name, csv_bytes):
     return created
 
 
-def process_export(sheets_svc, drive_svc, source_ids, cfg):
+def process_export_materiais(sheets_svc, drive_svc, source_ids):
     report_lines = []
     all_rows = []
-
-    name = cfg["name"]
-    num_cols = cfg["num_cols"]
-
-    # Cabeçalho
-    if cfg["fixed_header"]:
-        csv_header = cfg["fixed_header"]
-    else:
-        try:
-            csv_header = read_header(
-                sheets_svc,
-                CONFIG_SPREADSHEET_ID,
-                f"{cfg['base_sheet_name']}!{cfg['base_header_range']}",
-                num_cols,
-            ) + ["Com Mascara"]
-        except Exception:
-            csv_header = [f"Coluna {i}" for i in range(1, num_cols + 1)] + ["Com Mascara"]
 
     # Base principal
     try:
         base_rows = read_block(
             sheets_svc,
             CONFIG_SPREADSHEET_ID,
-            f"{cfg['base_sheet_name']}!{cfg['base_range']}",
-            num_cols,
+            f"{MATERIAIS_BASE_SHEET_NAME}!{MATERIAIS_BASE_RANGE}",
+            MATERIAIS_NUM_COLS,
         )
         report_lines.append(
-            f"{cfg['base_sheet_name']} ({CONFIG_SPREADSHEET_ID}): {len(base_rows)} linha(s)."
+            f"{MATERIAIS_BASE_SHEET_NAME} ({CONFIG_SPREADSHEET_ID}): {len(base_rows)} linha(s)."
         )
         all_rows.extend(base_rows)
     except HttpError as e:
-        report_lines.append(f"{cfg['base_sheet_name']}: ERRO -> {e}")
-        print(f"⚠️ Erro ao ler {cfg['base_sheet_name']} da planilha principal.")
+        report_lines.append(f"{MATERIAIS_BASE_SHEET_NAME}: ERRO -> {e}")
+        print(f"⚠️ Erro ao ler {MATERIAIS_BASE_SHEET_NAME} da planilha principal.")
 
-    # Fontes do BD_Config
+    # Fontes
     for i, fid in enumerate(source_ids, start=1):
         try:
             rows = read_block(
                 sheets_svc,
                 fid,
-                f"{cfg['source_sheet_name']}!{cfg['source_range']}",
-                num_cols,
+                f"{MATERIAIS_SOURCE_SHEET_NAME}!{MATERIAIS_SOURCE_RANGE}",
+                MATERIAIS_NUM_COLS,
             )
             report_lines.append(f"Fonte #{i}: {len(rows)} linha(s).")
             all_rows.extend(rows)
 
         except HttpError as e:
             report_lines.append(f"Fonte #{i}: ERRO -> {e}")
-            print(f"⚠️ Origem #{i} inacessível para {name} (ID: {fid}).")
+            print(f"⚠️ Origem #{i} inacessível para MATERIAIS (ID: {fid}).")
         except Exception as e:
             report_lines.append(f"Fonte #{i}: ERRO -> {e}")
 
@@ -425,36 +422,36 @@ def process_export(sheets_svc, drive_svc, source_ids, cfg):
     report_lines.append(f"Total lido antes da deduplicação: {total_lido} linha(s).")
 
     if total_lido == 0:
-        print(f"\n=== RELATÓRIO DE EXPORTAÇÃO: {name} ===")
+        print("\n=== RELATÓRIO DE EXPORTAÇÃO: MATERIAIS ===")
         print("\n".join(report_lines))
         print("\nNada para exportar.\n")
         return
 
-    print(f"🧱 Montando linhas finais de {name} com coluna extra para {total_lido} linha(s)...")
-    final_rows = montar_linhas_finais(all_rows, num_cols)
-
+    print(f"🧱 Montando linhas finais de MATERIAIS com coluna extra para {total_lido} linha(s)...")
+    final_rows = montar_linhas_finais_materiais(all_rows)
     final_rows_sem_duplicadas = remover_linhas_duplicadas(final_rows)
+
     total_final = len(final_rows_sem_duplicadas)
     removidas = total_lido - total_final
 
     report_lines.append(f"Total após remover duplicadas: {total_final} linha(s).")
     report_lines.append(f"Duplicadas removidas: {removidas} linha(s).")
 
-    csv_rows = [csv_header] + final_rows_sem_duplicadas
+    csv_rows = [MATERIAIS_HEADER] + final_rows_sem_duplicadas
     csv_bytes = build_csv_bytes(csv_rows)
 
     try:
         uploaded = create_or_update_csv_in_drive(
             drive_svc=drive_svc,
             folder_id=DRIVE_FOLDER_ID,
-            file_name=cfg["output_file_name"],
+            file_name=MATERIAIS_OUTPUT_FILE_NAME,
             csv_bytes=csv_bytes,
         )
     except HttpError as e:
-        print(f"❌ Erro ao enviar {cfg['output_file_name']} para o Google Drive:", e)
+        print(f"❌ Erro ao enviar {MATERIAIS_OUTPUT_FILE_NAME} para o Google Drive:", e)
         return
 
-    print(f"\n=== RELATÓRIO DE EXPORTAÇÃO: {name} ===")
+    print("\n=== RELATÓRIO DE EXPORTAÇÃO: MATERIAIS ===")
     print("\n".join(report_lines))
     print("\n✅ CSV processado com sucesso!")
     print("♻️ Ação: sobrescrito" if uploaded.get("_action") == "updated" else "🆕 Ação: criado")
@@ -462,6 +459,109 @@ def process_export(sheets_svc, drive_svc, source_ids, cfg):
     print(f"🆔 ID: {uploaded.get('id')}")
     if uploaded.get("webViewLink"):
         print(f"🔗 Link: {uploaded.get('webViewLink')}")
+    print()
+
+
+def process_export_materiais_por_ponto(sheets_svc, drive_svc, source_ids):
+    report_lines = []
+    all_rows = []
+
+    # Cabeçalho da base
+    try:
+        csv_header = read_header(
+            sheets_svc,
+            CONFIG_SPREADSHEET_ID,
+            f"{MPP_BASE_SHEET_NAME}!{MPP_BASE_HEADER_RANGE}",
+            MPP_NUM_COLS,
+        )
+    except Exception:
+        csv_header = [f"Coluna {i}" for i in range(1, MPP_NUM_COLS + 1)]
+
+    # Base principal
+    try:
+        base_rows = read_block(
+            sheets_svc,
+            CONFIG_SPREADSHEET_ID,
+            f"{MPP_BASE_SHEET_NAME}!{MPP_BASE_RANGE}",
+            MPP_NUM_COLS,
+        )
+        report_lines.append(
+            f"{MPP_BASE_SHEET_NAME} ({CONFIG_SPREADSHEET_ID}): {len(base_rows)} linha(s)."
+        )
+        all_rows.extend(base_rows)
+    except HttpError as e:
+        report_lines.append(f"{MPP_BASE_SHEET_NAME}: ERRO -> {e}")
+        print(f"⚠️ Erro ao ler {MPP_BASE_SHEET_NAME} da planilha principal.")
+
+    # Fontes
+    for i, fid in enumerate(source_ids, start=1):
+        try:
+            rows = read_block(
+                sheets_svc,
+                fid,
+                f"{MPP_SOURCE_SHEET_NAME}!{MPP_SOURCE_RANGE}",
+                MPP_NUM_COLS,
+            )
+            report_lines.append(f"Fonte #{i}: {len(rows)} linha(s).")
+            all_rows.extend(rows)
+
+        except HttpError as e:
+            report_lines.append(f"Fonte #{i}: ERRO -> {e}")
+            print(f"⚠️ Origem #{i} inacessível para MATERIAIS_POR_PONTO (ID: {fid}).")
+        except Exception as e:
+            report_lines.append(f"Fonte #{i}: ERRO -> {e}")
+
+    total_lido = len(all_rows)
+    report_lines.append(f"Total lido antes da deduplicação: {total_lido} linha(s).")
+
+    if total_lido == 0:
+        print("\n=== RELATÓRIO DE EXPORTAÇÃO: MATERIAIS_POR_PONTO ===")
+        print("\n".join(report_lines))
+        print("\nNada para exportar.\n")
+        return
+
+    # Sem coluna extra nesta etapa
+    final_rows = [pad_row_to_n_cols(row, MPP_NUM_COLS) for row in all_rows]
+    final_rows_sem_duplicadas = remover_linhas_duplicadas(final_rows)
+
+    total_final = len(final_rows_sem_duplicadas)
+    removidas = total_lido - total_final
+
+    report_lines.append(f"Total após remover duplicadas: {total_final} linha(s).")
+    report_lines.append(f"Duplicadas removidas: {removidas} linha(s).")
+
+    # Agrupa pela coluna H
+    grouped_rows = {}
+    for row in final_rows_sem_duplicadas:
+        valor_h = row[MPP_GROUP_COL_INDEX] if len(row) > MPP_GROUP_COL_INDEX else ""
+        group_key = sanitize_filename_component(valor_h)
+        grouped_rows.setdefault(group_key, []).append(row)
+
+    print("\n=== RELATÓRIO DE EXPORTAÇÃO: MATERIAIS_POR_PONTO ===")
+    print("\n".join(report_lines))
+    print(f"Arquivos a gerar: {len(grouped_rows)}")
+
+    for group_key, rows in sorted(grouped_rows.items()):
+        output_file_name = f"{MPP_FILE_PREFIX}_{group_key}.csv"
+        csv_rows = [csv_header] + rows
+        csv_bytes = build_csv_bytes(csv_rows)
+
+        try:
+            uploaded = create_or_update_csv_in_drive(
+                drive_svc=drive_svc,
+                folder_id=DRIVE_FOLDER_ID,
+                file_name=output_file_name,
+                csv_bytes=csv_bytes,
+            )
+        except HttpError as e:
+            print(f"❌ Erro ao enviar {output_file_name} para o Google Drive:", e)
+            continue
+
+        print(
+            f"✅ {output_file_name} -> {len(rows)} linha(s) | "
+            + ("sobrescrito" if uploaded.get("_action") == "updated" else "criado")
+        )
+
     print()
 
 
@@ -491,8 +591,8 @@ def main():
     else:
         print("⚠️ Nenhuma fonte encontrada em BD_Config!A3:A. Serão exportadas apenas as abas base.\n")
 
-    for cfg in EXPORTS:
-        process_export(sheets_svc, drive_svc, source_ids, cfg)
+    process_export_materiais(sheets_svc, drive_svc, source_ids)
+    process_export_materiais_por_ponto(sheets_svc, drive_svc, source_ids)
 
 
 if __name__ == "__main__":
