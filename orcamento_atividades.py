@@ -13,7 +13,7 @@
 # 2) Vários arquivos MATERIAIS_POR_PONTO_<valor_coluna_H>.csv
 #    - Base: MATERIAIS_POR_PONTO_BASE!A2:I
 #    - Fontes: MATERIAIS_POR_PONTO!A2:I
-#    - Cabeçalho lido de A1:I da aba base
+#    - Cabeçalho fixo
 #    - NÃO gera coluna extra
 #    - Agrupa pelo valor da coluna H
 #    - Remove duplicadas
@@ -72,11 +72,22 @@ MATERIAIS_HEADER = [
 MPP_FILE_PREFIX = "MATERIAIS_POR_PONTO"
 MPP_BASE_SHEET_NAME = "MATERIAIS_POR_PONTO_BASE"
 MPP_BASE_RANGE = "A2:I"
-MPP_BASE_HEADER_RANGE = "A1:I1"
 MPP_SOURCE_SHEET_NAME = "MATERIAIS_POR_PONTO"
 MPP_SOURCE_RANGE = "A2:I"
 MPP_NUM_COLS = 9
 MPP_GROUP_COL_INDEX = 7  # coluna H (0-based)
+
+MPP_HEADER = [
+    "Projeto",
+    "Ponto Obra",
+    "Código",
+    "Descrição",
+    "Quantidade",
+    "Orçamentista",
+    "Com Mascara",
+    "Unidade",
+    "Mascara e Ponto",
+]
 
 # ===============================================================
 
@@ -197,13 +208,6 @@ def read_block(svc, spreadsheet_id, rng, num_cols):
     values = read_values(svc, spreadsheet_id, rng)
     rows = [pad_row_to_n_cols(r, num_cols) for r in values]
     return tratar_colunas_numericas(rows)
-
-
-def read_header(svc, spreadsheet_id, rng, num_cols):
-    values = read_values(svc, spreadsheet_id, rng)
-    if values and values[0]:
-        return pad_row_to_n_cols(values[0], num_cols)
-    return [f"Coluna {i}" for i in range(1, num_cols + 1)]
 
 
 def normalizar_valor_codigo(valor):
@@ -466,16 +470,7 @@ def process_export_materiais_por_ponto(sheets_svc, drive_svc, source_ids):
     report_lines = []
     all_rows = []
 
-    # Cabeçalho da base
-    try:
-        csv_header = read_header(
-            sheets_svc,
-            CONFIG_SPREADSHEET_ID,
-            f"{MPP_BASE_SHEET_NAME}!{MPP_BASE_HEADER_RANGE}",
-            MPP_NUM_COLS,
-        )
-    except Exception:
-        csv_header = [f"Coluna {i}" for i in range(1, MPP_NUM_COLS + 1)]
+    csv_header = MPP_HEADER
 
     # Base principal
     try:
