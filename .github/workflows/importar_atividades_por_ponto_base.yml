@@ -1,4 +1,4 @@
-name: Orçamento Atividades
+name: Exportar CSVs Materiais
 
 on:
   schedule:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  orcamento-atividades:
+  exportar-csvs:
     runs-on: ubuntu-latest
 
     steps:
@@ -57,6 +57,6 @@ jobs:
           python -m json.tool credenciais.json > /dev/null
           echo "credenciais.json validado com sucesso"
 
-      - name: Executar orcamento_atividades.py
+      - name: Executar script unificado
         run: |
           python orcamento_atividades.py
