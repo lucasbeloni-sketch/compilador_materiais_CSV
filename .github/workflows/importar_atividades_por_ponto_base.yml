@@ -4,10 +4,10 @@ on:
   schedule:
     # Horário do GitHub Actions é UTC
     # 07:00 BRT -> 10:00 UTC
-    # 12:00 BRT -> 15:00 UTC
+    # 11:00 BRT -> 14:00 UTC
     # 15:00 BRT -> 18:00 UTC
     # 18:00 BRT -> 21:00 UTC
-    - cron: "0 10,15,18,21 * * *"
+    - cron: "0 10,14,18,21 * * *"
   workflow_dispatch:
 
 jobs:
