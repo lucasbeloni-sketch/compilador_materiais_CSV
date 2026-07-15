@@ -31,6 +31,8 @@ import re
 import io
 import csv
 import json
+import time
+import socket
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from google.oauth2 import service_account
@@ -39,6 +41,10 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 # ===================== CONFIG =====================
+# Timeout de socket para leituras/escritas na API (fontes grandes demoram).
+# Evita "The read operation timed out" em planilhas pesadas.
+socket.setdefaulttimeout(600)  # 10 min
+
 SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), "credenciais.json")
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -118,13 +124,24 @@ def get_services_and_email():
     drive_svc = build("drive", "v3", credentials=creds)
     return sheets_svc, drive_svc, creds.service_account_email
 
-def read_values(svc, spreadsheet_id, rng):
-    resp = svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=rng,
-        majorDimension="ROWS",
-    ).execute()
-    return resp.get("values", [])
+def read_values(svc, spreadsheet_id, rng, tentativas=4):
+    """Lê valores com retry em timeout transiente (fontes grandes)."""
+    for i in range(tentativas):
+        try:
+            resp = svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=rng,
+                majorDimension="ROWS",
+            ).execute(num_retries=3)
+            return resp.get("values", [])
+        except (socket.timeout, TimeoutError) as e:
+            if i == tentativas - 1:
+                raise
+            espera = 5 * (2 ** i)  # backoff: 5s, 10s, 20s
+            print(f"⏳ Timeout ao ler {spreadsheet_id} ({rng}). "
+                  f"Tentativa {i + 1}/{tentativas} falhou; aguardando {espera}s...")
+            time.sleep(espera)
+    return []
 
 def pad_row_to_n_cols(row, n):
     if len(row) < n:
