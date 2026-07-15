@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Credenciais (geradas via secret no CI; nunca commitar)
+credenciais.json
